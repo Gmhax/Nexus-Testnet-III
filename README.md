@@ -36,7 +36,7 @@
 ## Run the Auto-Installer
 Copy and paste the following one-liner to begin setup:
 ```
-wget -q https://raw.githubusercontent.com/SKaaalper/Nexus-Testnet-III/main/nexus-prover-setup.sh && chmod +x nexus-prover-setup.sh && sudo ./nexus-prover-setup.sh
+wget -q https://raw.githubusercontent.com/Gmhax/Nexus-Testnet-III/refs/heads/main/nexus-prover-setup.sh && chmod +x nexus-prover-setup.sh && sudo ./nexus-prover-setup.sh
 ```
 - Go to: https://app.nexus.xyz/nodes
 - Click **"Add CLI Node"** in the dashboard to generate your `Node ID`.
