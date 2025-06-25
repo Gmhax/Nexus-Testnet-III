@@ -12,7 +12,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# === Welcome banner ===
+# === Banner ===
 clear
 echo -e "${YELLOW}==================================================${NC}"
 echo -e "${GREEN}=       🚀 Nexus Multi-Node Setup              =${NC}"
@@ -20,89 +20,102 @@ echo -e "${YELLOW}=  Telegram: https://t.me/KatayanAirdropGnC  =${NC}"
 echo -e "${GREEN}=        by: _Jheff | PNGO Boiz!!             =${NC}"
 echo -e "${YELLOW}==================================================${NC}\n"
 
-# === Working directory ===
+# === Disk space check ===
+REQUIRED_KB=5000000  # 5 GB
+FREE_KB=$(df --output=avail / | tail -n1)
+if [ "$FREE_KB" -lt "$REQUIRED_KB" ]; then
+  echo -e "${RED}[!] Not enough disk space (min 5 GB required). Aborting.${NC}"
+  exit 1
+fi
+
+# === Directories ===
 WORKDIR="/root/nexus-prover"
-echo -e "${GREEN}[*] Working directory: $WORKDIR${NC}"
-mkdir -p "$WORKDIR"
+LOGDIR="/mnt/storage/nexus-logs"
+mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR" || exit 1
 
-# === Install dependencies ===
+# === Dependencies ===
 apt update && apt upgrade -y
 apt install -y screen curl wget build-essential pkg-config libssl-dev git-all protobuf-compiler ca-certificates
 
-# === Install Rust if missing ===
+# === Install Rust ===
 if ! command -v rustup &>/dev/null; then
   echo -e "${GREEN}[*] Installing Rust...${NC}"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 fi
-
-# === Setup Rust environment ===
 source "$HOME/.cargo/env"
 echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$HOME/.bashrc"
 source "$HOME/.bashrc"
 rustup target add riscv32i-unknown-none-elf
 
 # === Install Nexus CLI ===
-echo -e "${GREEN}[*] Downloading and installing Nexus CLI...${NC}"
+echo -e "${GREEN}[*] Downloading Nexus CLI...${NC}"
 yes | curl -s https://cli.nexus.xyz/ | bash
 
-# === Find nexus-network binary ===
-echo -e "${GREEN}[*] Locating nexus-network binary...${NC}"
+# === Find nexus-network ===
+echo -e "${GREEN}[*] Searching for nexus-network binary...${NC}"
 NEXUS_BIN=$(find / -type f -name "nexus-network" -perm /u+x 2>/dev/null | head -n 1)
 
 if [ -x "$NEXUS_BIN" ]; then
-  echo -e "${GREEN}[✓] nexus-network found at: $NEXUS_BIN${NC}"
+  echo -e "${GREEN}[✓] Found at: $NEXUS_BIN${NC}"
   cp "$NEXUS_BIN" /usr/local/bin/
   chmod +x /usr/local/bin/nexus-network
 else
-  echo -e "${RED}[!] nexus-network binary not found after install. Aborting.${NC}"
+  echo -e "${RED}[!] nexus-network not found. Aborting.${NC}"
   exit 1
 fi
 
-# === Ask user how many nodes ===
-echo -e "${YELLOW}[?] How many node IDs do you want to run? (1-10)${NC}"
+# === How many nodes ===
+echo -e "${YELLOW}[?] How many node IDs to run? (1–10)${NC}"
 read -rp "> " NODE_COUNT
 if ! [[ "$NODE_COUNT" =~ ^[1-9]$|^10$ ]]; then
-  echo -e "${RED}[!] Invalid number. Choose between 1 to 10.${NC}"
+  echo -e "${RED}[!] Invalid input. Must be 1–10.${NC}"
   exit 1
 fi
 
-# === Read node IDs ===
+# === Input node IDs ===
 NODE_IDS=()
 for ((i=1;i<=NODE_COUNT;i++)); do
   echo -e "${YELLOW}Enter node-id #$i:${NC}"
   read -rp "> " NODE_ID
   if [ -z "$NODE_ID" ]; then
-    echo -e "${RED}[!] Empty node-id. Aborting.${NC}"
+    echo -e "${RED}[!] Empty input. Aborting.${NC}"
     exit 1
   fi
   NODE_IDS+=("$NODE_ID")
 done
 
-# === Launch nodes in screen sessions ===
+# === Launch nodes with autorestart ===
 for ((i=0;i<NODE_COUNT;i++)); do
-  SESSION_NAME="nexus$((i+1))"
+  SESSION="nexus$((i+1))"
   NODE_ID="${NODE_IDS[$i]}"
-  
-  screen -S "$SESSION_NAME" -X quit >/dev/null 2>&1 || true
+  LOGFILE="$LOGDIR/log_$SESSION.txt"
 
-  echo -e "${GREEN}[*] Launching node-id $NODE_ID in screen session '$SESSION_NAME'...${NC}"
-  
-  screen -dmS "$SESSION_NAME" bash -c "cd $WORKDIR && nexus-network start --node-id $NODE_ID 2>&1 | tee $WORKDIR/log_$SESSION_NAME.txt"
-  
-  sleep 1
+  # Kill any old screen
+  screen -S "$SESSION" -X quit >/dev/null 2>&1 || true
 
-  if screen -list | grep -q "$SESSION_NAME"; then
-    echo -e "${GREEN}[✓] Installation complete. Screen '$SESSION_NAME' created successfully for node-id $NODE_ID.${NC}"
+  echo -e "${GREEN}[*] Launching node-id $NODE_ID in screen '$SESSION'...${NC}"
+
+  # Launch screen with infinite restart loop
+  screen -dmS "$SESSION" bash -c "cd $WORKDIR && while true; do \
+    echo \"[\$(date)] Starting node-id $NODE_ID\" >> \"$LOGFILE\"; \
+    nexus-network start --node-id $NODE_ID 2>&1 | tee -a \"$LOGFILE\"; \
+    echo \"[\$(date)] node-id $NODE_ID crashed. Restarting in 10s...\" >> \"$LOGFILE\"; \
+    sleep 10; \
+  done"
+
+  sleep 2
+
+  if screen -list | grep -q "$SESSION"; then
+    echo -e "${GREEN}[✓] '$SESSION' started successfully for node-id $NODE_ID.${NC}"
   else
-    echo -e "${RED}[✗] Installation failed. No screen created for node-id $NODE_ID (${SESSION_NAME}).${NC}"
+    echo -e "${RED}[✗] Failed to start screen session '$SESSION'.${NC}"
   fi
-
-  sleep 1
 done
 
 # === Final instructions ===
-echo -e "${YELLOW}\n[i] To detach logs: CTRL+A then D"
-echo -e "[i] To reattach: screen -r nexus1 (or nexus2, etc.)"
+echo -e "${YELLOW}\n[i] To detach: CTRL+A then D"
+echo -e "[i] To reattach: screen -r nexus1 (or nexus2...)"
 echo -e "[i] To stop: screen -XS nexusX quit"
-echo -e "[i] To cleanup: rm -rf $WORKDIR${NC}"
+echo -e "[i] Logs saved at: $LOGDIR"
+echo -e "[i] To delete everything: rm -rf $WORKDIR${NC}"
